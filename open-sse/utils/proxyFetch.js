@@ -1,5 +1,5 @@
 import { Readable } from "stream";
-import { MEMORY_CONFIG } from "../config/runtimeConfig.js";
+import { MEMORY_CONFIG, FETCH_BODY_TIMEOUT_MS } from "../config/runtimeConfig.js";
 
 const originalFetch = globalThis.fetch;
 const proxyDispatchers = new Map();
@@ -251,11 +251,11 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
         throw new Error(`[ProxyFetch] Proxy required but failed (strictProxy=true): ${proxyError.message}`);
       }
       console.warn(`[ProxyFetch] Proxy failed, falling back to direct: ${proxyError.message}`);
-      return originalFetch(url, options);
+      return originalFetch(url, { bodyTimeout: FETCH_BODY_TIMEOUT_MS, ...options });
     }
   }
 
-  return originalFetch(url, options);
+  return originalFetch(url, { bodyTimeout: FETCH_BODY_TIMEOUT_MS, ...options });
 }
 
 /**

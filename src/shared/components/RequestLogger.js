@@ -1,12 +1,36 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Card from "./Card";
+import LiveElapsed from "./LiveElapsed";
+
+// Track when each PENDING log was first seen
+function usePendingStartTimes(logs) {
+  const startMap = useRef({});
+
+  for (const log of logs) {
+    const parts = log.split(" | ");
+    if (parts.length < 7) continue;
+    const status = parts[6];
+    const key = log; // use entire log line as identity
+    if (status.includes("PENDING") && !startMap.current[key]) {
+      startMap.current[key] = Date.now();
+    }
+  }
+  // clean up finished logs
+  for (const key of Object.keys(startMap.current)) {
+    if (!logs.includes(key)) delete startMap.current[key];
+  }
+
+  return startMap;
+}
 
 export default function RequestLogger() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [tick, setTick] = useState(0);
+  const pendingStarts = usePendingStartTimes(logs);
 
   useEffect(() => {
     fetchLogs();
@@ -21,6 +45,12 @@ export default function RequestLogger() {
     }
     return () => clearInterval(interval);
   }, [autoRefresh]);
+
+  // Tick every second for live elapsed display on pending rows
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const fetchLogs = async (showLoading = true) => {
     if (showLoading) setLoading(true);
@@ -101,9 +131,14 @@ export default function RequestLogger() {
                       <td className="px-3 py-1.5 border-r border-border text-right text-success">{parts[5]}</td>
                       <td className={`px-3 py-1.5 font-bold ${isSuccess ? 'text-success' :
                           isFailed ? 'text-error' :
-                            'text-primary animate-pulse'
+                            'text-primary'
                         }`}>
-                        {status}
+                        {isPending ? (
+                          <span>
+                            {status}{" "}
+                            <LiveElapsed since={pendingStarts.current[log] || Date.now()} className="font-normal opacity-70" />
+                          </span>
+                        ) : status}
                       </td>
                     </tr>
                   );

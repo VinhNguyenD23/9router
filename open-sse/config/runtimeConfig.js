@@ -32,7 +32,10 @@ export const MEMORY_CONFIG = {
 };
 
 // Stream stall timeout: abort if no chunk received within this duration
-export const STREAM_STALL_TIMEOUT_MS = 10 * 60 * 1000;  // 10 min for long-thinking models
+export const STREAM_STALL_TIMEOUT_MS = 60 * 60 * 1000;  // 60 min for long-thinking models
+
+// Fetch body timeout must exceed stall timeout so streams aren't killed at HTTP level
+export const FETCH_BODY_TIMEOUT_MS = 60 * 60 * 1000 + 60_000;  // 60 min + 1 min buffer
 
 // Default token limits
 export const DEFAULT_MAX_TOKENS = 64000;

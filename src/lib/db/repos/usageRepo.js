@@ -16,12 +16,14 @@ if (!global._statsEmitter) {
   global._statsEmitter.setMaxListeners(50);
 }
 if (!global._pendingTimers) global._pendingTimers = {};
+if (!global._pendingStartTimes) global._pendingStartTimes = {};
 if (!global._recentRing) global._recentRing = { items: [], initialized: false };
 if (!global._connectionMapCache) global._connectionMapCache = { map: {}, ts: 0 };
 
 const pendingRequests = global._pendingRequests;
 const lastErrorProvider = global._lastErrorProvider;
 const pendingTimers = global._pendingTimers;
+const pendingStartTimes = global._pendingStartTimes;
 const recentRing = global._recentRing;
 const connCache = global._connectionMapCache;
 
@@ -171,9 +173,11 @@ export function trackPendingRequest(model, provider, connectionId, started, erro
   }
 
   if (started) {
+    pendingStartTimes[timerKey] = Date.now();
     clearTimeout(pendingTimers[timerKey]);
     pendingTimers[timerKey] = setTimeout(() => {
       delete pendingTimers[timerKey];
+      delete pendingStartTimes[timerKey];
       if (pendingRequests.byModel[modelKey] > 0) pendingRequests.byModel[modelKey] = 0;
       if (connectionId && pendingRequests.byAccount[connectionId]?.[modelKey] > 0) {
         pendingRequests.byAccount[connectionId][modelKey] = 0;
@@ -183,6 +187,7 @@ export function trackPendingRequest(model, provider, connectionId, started, erro
   } else {
     clearTimeout(pendingTimers[timerKey]);
     delete pendingTimers[timerKey];
+    delete pendingStartTimes[timerKey];
   }
 
   if (!started && error && provider) {
@@ -204,10 +209,12 @@ export async function getActiveRequests() {
       if (count > 0) {
         const accountName = connectionMap[connectionId] || `Account ${connectionId.slice(0, 8)}...`;
         const match = modelKey.match(/^(.*) \((.*)\)$/);
+        const timerKey = `${connectionId}|${modelKey}`;
+        const startedAt = pendingStartTimes[timerKey] || null;
         activeRequests.push({
           model: match ? match[1] : modelKey,
           provider: match ? match[2] : "unknown",
-          account: accountName, count,
+          account: accountName, count, startedAt,
         });
       }
     }

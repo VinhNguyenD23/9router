@@ -549,7 +549,8 @@ function startServer(latestVersion) {
       env: {
         ...buildEnvWithRuntime(process.env),
         PORT: port.toString(),
-        HOSTNAME: host
+        HOSTNAME: host,
+        KEEP_ALIVE_TIMEOUT: "3600000"  // 60 min — prevent SSE stream drops during long-thinking
       }
     });
     if (!showLog && child.stderr) {

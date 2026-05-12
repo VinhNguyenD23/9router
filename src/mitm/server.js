@@ -248,8 +248,9 @@ try {
   process.exit(1);
 }
 
-server.keepAliveTimeout = 120_000;   // 2 min — prevent idle connection drops
-server.headersTimeout = 125_000;     // must be > keepAliveTimeout (Node.js default 5s → too low)
+server.keepAliveTimeout = 3_600_000;   // 60 min — long-thinking models may be silent for minutes
+server.headersTimeout = 3_605_000;     // must be > keepAliveTimeout
+server.requestTimeout = 3_600_000;     // Node 25 default 300s too short for SSE streams
 
 server.listen(LOCAL_PORT, () => log(`🚀 Server ready on :${LOCAL_PORT}`));
 
