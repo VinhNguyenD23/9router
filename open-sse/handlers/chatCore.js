@@ -168,63 +168,101 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     log?.debug?.("PROXY", `${provider.toUpperCase()} | ${model} | conn=${connectionName} | no_proxy=${proxyOptions.connectionNoProxy}`);
   }
 
-  // Execute request
+  // Retriable HTTP status codes (server errors, not client errors)
+  const isRetriableStatus = (s) => [502, 503, 504, 520, 524, 525].includes(s);
+  const isClientAbort = () => streamController.signal.aborted;
+
+  const MAX_RETRIES = 5;
+  const RETRY_DELAY_MS = 5_000;
+
+  // Execute request with retry
   let providerResponse, providerUrl, providerHeaders, finalBody;
-  try {
-    const result = await executor.execute({ model, body: translatedBody, stream, credentials, signal: streamController.signal, log, proxyOptions });
-    providerResponse = result.response;
-    providerUrl = result.url;
-    providerHeaders = result.headers;
-    finalBody = result.transformedBody;
-    reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
-  } catch (error) {
-    trackPendingRequest(model, provider, connectionId, false, true);
-    appendRequestLog({ model, provider, connectionId, status: `FAILED ${error.name === "AbortError" ? 499 : HTTP_STATUS.BAD_GATEWAY}` }).catch(() => {});
-    saveRequestDetail(buildRequestDetail({
-      provider, model, connectionId,
-      latency: { ttft: 0, total: Date.now() - requestStartTime },
-      tokens: { prompt_tokens: 0, completion_tokens: 0 },
-      request: extractRequestConfig(body, stream),
-      providerRequest: translatedBody || null,
-      response: { error: error.message || String(error), status: error.name === "AbortError" ? 499 : 502, thinking: null },
-      status: "error"
-    })).catch(() => {});
-
-    if (error.name === "AbortError") {
-      streamController.handleError(error);
-      return createErrorResult(499, "Request aborted");
-    }
-    const errMsg = formatProviderError(error, provider, model, HTTP_STATUS.BAD_GATEWAY);
-    console.log(`${COLORS.red}[ERROR] ${errMsg}${COLORS.reset}`);
-    return createErrorResult(HTTP_STATUS.BAD_GATEWAY, errMsg);
-  }
-
-  // Handle 401/403 - try token refresh (skip for noAuth providers)
-  if (!executor.noAuth && (providerResponse.status === HTTP_STATUS.UNAUTHORIZED || providerResponse.status === HTTP_STATUS.FORBIDDEN)) {
+  let attempt = 0;
+  while (true) {
+    attempt++;
     try {
-      const newCredentials = await refreshWithRetry(() => executor.refreshCredentials(credentials, log), 3, log);
-      if (newCredentials?.accessToken || newCredentials?.copilotToken) {
-        log?.info?.("TOKEN", `${provider.toUpperCase()} | refreshed`);
-        Object.assign(credentials, newCredentials);
-        if (onCredentialsRefreshed) {
-          try { await onCredentialsRefreshed(newCredentials); } catch (e) { log?.warn?.("TOKEN", `onCredentialsRefreshed failed: ${e.message}`); }
-        }
+      const result = await executor.execute({ model, body: translatedBody, stream, credentials, signal: streamController.signal, log, proxyOptions });
+      providerResponse = result.response;
+      providerUrl = result.url;
+      providerHeaders = result.headers;
+      finalBody = result.transformedBody;
+      reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
+
+      // Handle 401/403 - try token refresh (skip for noAuth providers)
+      if (!executor.noAuth && (providerResponse.status === HTTP_STATUS.UNAUTHORIZED || providerResponse.status === HTTP_STATUS.FORBIDDEN)) {
         try {
-          const retryResult = await executor.execute({ model, body: translatedBody, stream, credentials, signal: streamController.signal, log, proxyOptions });
-          if (retryResult.response.ok) { providerResponse = retryResult.response; providerUrl = retryResult.url; }
-        } catch { log?.warn?.("TOKEN", `${provider.toUpperCase()} | retry after refresh failed`); }
-      } else {
-        log?.warn?.("TOKEN", `${provider.toUpperCase()} | refresh failed`);
+          const newCredentials = await refreshWithRetry(() => executor.refreshCredentials(credentials, log), 3, log);
+          if (newCredentials?.accessToken || newCredentials?.copilotToken) {
+            log?.info?.("TOKEN", `${provider.toUpperCase()} | refreshed`);
+            Object.assign(credentials, newCredentials);
+            if (onCredentialsRefreshed) {
+              try { await onCredentialsRefreshed(newCredentials); } catch (e) { log?.warn?.("TOKEN", `onCredentialsRefreshed failed: ${e.message}`); }
+            }
+            try {
+              const retryResult = await executor.execute({ model, body: translatedBody, stream, credentials, signal: streamController.signal, log, proxyOptions });
+              if (retryResult.response.ok) { providerResponse = retryResult.response; providerUrl = retryResult.url; }
+            } catch { log?.warn?.("TOKEN", `${provider.toUpperCase()} | retry after refresh failed`); }
+          } else {
+            log?.warn?.("TOKEN", `${provider.toUpperCase()} | refresh failed`);
+          }
+        } catch (e) {
+          log?.warn?.("TOKEN", `${provider.toUpperCase()} | refresh threw: ${e.message}`);
+        }
       }
-    } catch (e) {
-      log?.warn?.("TOKEN", `${provider.toUpperCase()} | refresh threw: ${e.message}`);
+
+      // Provider returned non-retriable error → bail immediately
+      if (!providerResponse.ok && !isRetriableStatus(providerResponse.status)) {
+        break;
+      }
+
+      // Success or retriable status → if ok, we're done; if retriable, will retry below
+      if (providerResponse.ok) break;
+
+    } catch (error) {
+      // User aborted — don't retry
+      if (error.name === "AbortError" || isClientAbort()) {
+        trackPendingRequest(model, provider, connectionId, false, true);
+        appendRequestLog({ model, provider, connectionId, status: "FAILED 499" }).catch(() => {});
+        saveRequestDetail(buildRequestDetail({
+          provider, model, connectionId,
+          latency: { ttft: 0, total: Date.now() - requestStartTime },
+          tokens: { prompt_tokens: 0, completion_tokens: 0 },
+          request: extractRequestConfig(body, stream),
+          providerRequest: translatedBody || null,
+          response: { error: "Request aborted", status: 499, thinking: null },
+          status: "error"
+        })).catch(() => {});
+        streamController.handleError(error);
+        return createErrorResult(499, "Request aborted");
+      }
+
+      // Non-abort fetch/network error — retriable
+      if (attempt < MAX_RETRIES && !isClientAbort()) {
+        console.log(`${COLORS.yellow}[RETRY ${attempt}/${MAX_RETRIES}] ${provider.toUpperCase()} | ${model} | ${error.message}${COLORS.reset}`);
+        await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+        continue;
+      }
     }
+
+    // Will we retry? Check if retriable error and attempts remain
+    if (!providerResponse || (providerResponse && !providerResponse.ok && isRetriableStatus(providerResponse.status))) {
+      if (attempt < MAX_RETRIES && !isClientAbort()) {
+        const status = providerResponse ? providerResponse.status : "network";
+        console.log(`${COLORS.yellow}[RETRY ${attempt}/${MAX_RETRIES}] ${provider.toUpperCase()} | ${model} | status=${status}${COLORS.reset}`);
+        await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+        continue;
+      }
+    }
+
+    break;
   }
 
-  // Provider returned error
-  if (!providerResponse.ok) {
+  // All retries exhausted — non-ok response
+  if (!providerResponse || !providerResponse.ok) {
     trackPendingRequest(model, provider, connectionId, false, true);
-    const { statusCode, message, resetsAtMs } = await parseUpstreamError(providerResponse, executor);
+    const { statusCode, message, resetsAtMs } = providerResponse
+      ? await parseUpstreamError(providerResponse, executor)
+      : { statusCode: HTTP_STATUS.BAD_GATEWAY, message: "Upstream fetch failed after retries", resetsAtMs: undefined };
     appendRequestLog({ model, provider, connectionId, status: `FAILED ${statusCode}` }).catch(() => {});
     saveRequestDetail(buildRequestDetail({
       provider, model, connectionId,
@@ -237,7 +275,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     })).catch(() => {});
 
     const errMsg = formatProviderError(new Error(message), provider, model, statusCode);
-    console.log(`${COLORS.red}[ERROR] ${errMsg}${COLORS.reset}`);
+    console.log(`${COLORS.red}[ERROR] ${errMsg} (after ${attempt} attempts)${COLORS.reset}`);
     reqLogger.logError(new Error(message), finalBody || translatedBody);
     return createErrorResult(statusCode, errMsg, resetsAtMs);
   }
