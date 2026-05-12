@@ -1,9 +1,7 @@
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 
 const projectRoot = dirname(fileURLToPath(import.meta.url));
-const monorepoRoot = resolve(projectRoot, "..");
-
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
@@ -11,7 +9,7 @@ const nextConfig = {
   turbopack: {
     root: projectRoot
   },
-  outputFileTracingRoot: monorepoRoot,
+  outputFileTracingRoot: projectRoot,
   outputFileTracingExcludes: {
     "*": ["./app/gitbook/**/*", "./gitbook/**/*"]
   },
