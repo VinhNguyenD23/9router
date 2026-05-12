@@ -13,6 +13,7 @@ function isLLMProvider(id) {
 import Badge from "./Badge";
 import Card from "./Card";
 import LiveElapsed from "./LiveElapsed";
+import RequestDetailDrawer from "@/app/(dashboard)/dashboard/usage/components/RequestDetailDrawer";
 import OverviewCards from "@/app/(dashboard)/dashboard/usage/components/OverviewCards";
 import UsageTable, { fmt, fmtTime } from "@/app/(dashboard)/dashboard/usage/components/UsageTable";
 import ProviderTopology from "@/app/(dashboard)/dashboard/usage/components/ProviderTopology";
@@ -39,7 +40,26 @@ function TimeAgo({ timestamp }) {
 }
 
 function RecentRequests({ requests = [] }) {
+  const [detail, setDetail] = useState(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+
+  const openDetail = async (r) => {
+    if (!r.detailId) return;
+    setLoadingDetail(true);
+    setDetail({ loading: true });
+    try {
+      const res = await fetch(`/api/usage/request-detail?id=${encodeURIComponent(r.detailId)}`);
+      if (res.ok) setDetail(await res.json());
+      else setDetail({ error: "Detail not found" });
+    } catch {
+      setDetail({ error: "Failed to fetch detail" });
+    } finally {
+      setLoadingDetail(false);
+    }
+  };
+
   return (
+    <>
     <Card className="flex min-w-0 flex-col overflow-hidden" padding="sm" style={{ height: 480 }}>
       {/* Header */}
       <div className="px-1 py-2 border-b border-border shrink-0">
@@ -50,13 +70,14 @@ function RecentRequests({ requests = [] }) {
         <div className="flex-1 flex items-center justify-center text-text-muted text-sm">No requests yet.</div>
       ) : (
         <div className="flex-1 overflow-y-auto">
-          <table className="w-full min-w-[300px] border-collapse text-xs">
+          <table className="w-full min-w-[320px] border-collapse text-xs">
             <thead className="sticky top-0 bg-bg z-10">
               <tr className="border-b border-border">
                 <th className="py-1.5 text-left font-semibold text-text-muted w-2"></th>
                 <th className="py-1.5 text-left font-semibold text-text-muted">Model</th>
                 <th className="py-1.5 text-right font-semibold text-text-muted whitespace-nowrap">In / Out</th>
                 <th className="py-1.5 text-right font-semibold text-text-muted">When</th>
+                <th className="py-1.5 text-right font-semibold text-text-muted w-12">Detail</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/50">
@@ -74,6 +95,20 @@ function RecentRequests({ requests = [] }) {
                       <span className="text-success">{fmt(r.completionTokens)}↓</span>
                     </td>
                     <td className="py-1.5 text-right text-text-muted whitespace-nowrap"><TimeAgo timestamp={r.timestamp} /></td>
+                    <td className="py-1.5 text-right">
+                      {r.detailId ? (
+                        <button
+                          type="button"
+                          onClick={() => openDetail(r)}
+                          className="material-symbols-outlined text-[14px] text-text-muted hover:text-primary transition-colors leading-none align-middle"
+                          title="View detail"
+                        >
+                          search
+                        </button>
+                      ) : (
+                        <span className="text-text-muted/40" title="No detail saved for this request">—</span>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
@@ -82,6 +117,16 @@ function RecentRequests({ requests = [] }) {
         </div>
       )}
     </Card>
+
+    {/* Detail Drawer */}
+    {detail && (
+      <RequestDetailDrawer
+        detail={detail}
+        loading={loadingDetail}
+        onClose={() => setDetail(null)}
+      />
+    )}
+    </>
   );
 }
 

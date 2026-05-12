@@ -4,7 +4,7 @@ import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 const DEFAULT_MAX_RECORDS = 200;
 const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_FLUSH_INTERVAL_MS = 5000;
-const DEFAULT_MAX_JSON_SIZE = 5 * 1024;
+const DEFAULT_MAX_JSON_SIZE = 500 * 1024;
 const CONFIG_CACHE_TTL_MS = 5000;
 
 let cachedConfig = null;
@@ -63,7 +63,8 @@ function generateDetailId(model) {
 function truncateField(obj, maxSize) {
   const str = JSON.stringify(obj || {});
   if (str.length > maxSize) {
-    return { _truncated: true, _originalSize: str.length, _preview: str.substring(0, 200) };
+    const formatted = JSON.stringify(obj || {}, null, 2);
+    return { _truncated: true, _originalSize: str.length, _preview: formatted.substring(0, 5000) };
   }
   return obj || {};
 }

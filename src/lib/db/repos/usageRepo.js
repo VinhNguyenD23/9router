@@ -79,7 +79,18 @@ function aggregateEntryToDay(day, entry) {
 }
 
 function pushToRing(entry) {
-  recentRing.items.push(entry);
+  const ringEntry = {
+    provider: entry.provider || "unknown",
+    model: entry.model || "unknown",
+    timestamp: entry.timestamp || new Date().toISOString(),
+    tokens: {
+      prompt_tokens: entry.tokens?.prompt_tokens || 0,
+      completion_tokens: entry.tokens?.completion_tokens || 0,
+    },
+    status: entry.status || "ok",
+    detailId: entry.detailId || null,
+  };
+  recentRing.items.push(ringEntry);
   if (recentRing.items.length > RING_CAP) {
     recentRing.items = recentRing.items.slice(-RING_CAP);
   }
@@ -103,12 +114,16 @@ async function ensureRingInitialized() {
   recentRing.initialized = true;
   try {
     const db = await getAdapter();
-    const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKey, endpoint, cost, status, tokens FROM usageHistory ORDER BY id DESC LIMIT ?`, [RING_CAP]);
-    recentRing.items = rows.reverse().map((r) => ({
-      timestamp: r.timestamp, provider: r.provider, model: r.model, connectionId: r.connectionId,
-      apiKey: r.apiKey, endpoint: r.endpoint, cost: r.cost, status: r.status,
-      tokens: parseJson(r.tokens, {}),
-    }));
+    const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKey, endpoint, cost, status, tokens, meta FROM usageHistory ORDER BY id DESC LIMIT ?`, [RING_CAP]);
+    recentRing.items = rows.reverse().map((r) => {
+      const meta = parseJson(r.meta, {});
+      return {
+        timestamp: r.timestamp, provider: r.provider, model: r.model, connectionId: r.connectionId,
+        apiKey: r.apiKey, endpoint: r.endpoint, cost: r.cost, status: r.status,
+        tokens: parseJson(r.tokens, {}),
+        detailId: meta.detailId || null,
+      };
+    });
   } catch {}
 }
 
@@ -231,6 +246,7 @@ export async function getActiveRequests() {
         promptTokens: t.prompt_tokens || t.input_tokens || 0,
         completionTokens: t.completion_tokens || t.output_tokens || 0,
         status: e.status || "ok",
+        detailId: e.detailId || null,
       };
     })
     .filter((e) => {
@@ -267,7 +283,7 @@ export async function saveRequestUsage(entry) {
           entry.timestamp, entry.provider || null, entry.model || null,
           entry.connectionId || null, entry.apiKey || null, entry.endpoint || null,
           promptTokens, completionTokens, entry.cost || 0, entry.status || "ok",
-          stringifyJson(tokens), stringifyJson({}),
+          stringifyJson(tokens), stringifyJson({ detailId: entry.detailId || null }),
         ]
       );
 
@@ -349,16 +365,18 @@ export async function getUsageStats(period = "all") {
   for (const k of allApiKeys) apiKeyMap[k.key] = { name: k.name, id: k.id, createdAt: k.createdAt };
 
   // recentRequests from live history (last 100 entries enough for 20 deduped)
-  const recentRows = db.all(`SELECT timestamp, provider, model, tokens, status FROM usageHistory ORDER BY id DESC LIMIT 100`);
+  const recentRows = db.all(`SELECT timestamp, provider, model, tokens, status, meta FROM usageHistory ORDER BY id DESC LIMIT 100`);
   const seen = new Set();
   const recentRequests = recentRows
     .map((r) => {
       const t = parseJson(r.tokens, {}) || {};
+      const meta = parseJson(r.meta, {}) || {};
       return {
         timestamp: r.timestamp, model: r.model, provider: r.provider || "",
         promptTokens: t.prompt_tokens || t.input_tokens || 0,
         completionTokens: t.completion_tokens || t.output_tokens || 0,
         status: r.status || "ok",
+        detailId: meta.detailId || null,
       };
     })
     .filter((e) => {
