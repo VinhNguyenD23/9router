@@ -51,6 +51,23 @@ step("Copy public/ + .next/static/");
 cp(path.join(root, "public"), path.join(cliApp, "public"));
 cp(path.join(root, ".next", "static"), path.join(cliApp, ".next", "static"));
 
+// Copy transitive deps from pnpm store that Next.js standalone tracing misses.
+// Turbopack NFT doesn't trace all pnpm-hoisted packages (e.g. @swc/helpers, @next/env).
+const pnpmDir = path.join(root, "node_modules", ".pnpm");
+const pnpmPkgs = fs.readdirSync(pnpmDir);
+const missingDeps = {
+  "@swc+helpers": ["@swc", "helpers"],
+  "@next+env":     ["@next", "env"],
+};
+for (const name of pnpmPkgs) {
+  const match = Object.keys(missingDeps).find(prefix => name.startsWith(prefix + "@"));
+  if (!match) continue;
+  const destParts = missingDeps[match];
+  const src = path.join(pnpmDir, name, "node_modules", ...destParts);
+  const dest = path.join(cliApp, "node_modules", ...destParts);
+  if (fs.existsSync(src)) cp(src, dest);
+}
+
 // 6. Copy standalone to root app/ (buildMitm.js reads from there as input)
 const appDir = path.join(root, "app");
 step("Copy .next/standalone → app/");
