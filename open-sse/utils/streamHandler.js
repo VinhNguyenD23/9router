@@ -1,6 +1,33 @@
 // Stream handler with disconnect detection - shared for all providers
 import { STREAM_STALL_TIMEOUT_MS } from "../config/runtimeConfig.js";
 
+const SSE_HEARTBEAT_MS = 15_000;  // send SSE comment ping to keep proxies alive
+const encoder = new TextEncoder();
+const SSE_HEARTBEAT = encoder.encode(": heartbeat\n\n");
+
+function createHeartbeatStream(intervalMs = SSE_HEARTBEAT_MS) {
+  let timer = null;
+  let ctrl = null;
+  const cleanup = () => { if (timer) { clearInterval(timer); timer = null; } };
+  return new TransformStream({
+    start(controller) {
+      ctrl = controller;
+      timer = setInterval(() => {
+        try { ctrl.enqueue(SSE_HEARTBEAT); } catch {}
+      }, intervalMs);
+    },
+    transform(chunk, controller) {
+      controller.enqueue(chunk);
+    },
+    flush() {
+      cleanup();
+    },
+    cancel() {
+      cleanup();
+    }
+  });
+}
+
 // Get HH:MM:SS timestamp
 function getTimeString() {
   return new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -142,8 +169,9 @@ export function createDisconnectAwareStream(transformStream, streamController) {
  */
 export function pipeWithDisconnect(providerResponse, transformStream, streamController) {
   const transformedBody = providerResponse.body.pipeThrough(transformStream);
+  const heartbeatBody = transformedBody.pipeThrough(createHeartbeatStream());
   return createDisconnectAwareStream(
-    { readable: transformedBody, writable: { getWriter: () => ({ abort: () => Promise.resolve() }) } },
+    { readable: heartbeatBody, writable: { getWriter: () => ({ abort: () => Promise.resolve() }) } },
     streamController
   );
 }

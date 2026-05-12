@@ -248,6 +248,9 @@ try {
   process.exit(1);
 }
 
+server.keepAliveTimeout = 120_000;   // 2 min — prevent idle connection drops
+server.headersTimeout = 125_000;     // must be > keepAliveTimeout (Node.js default 5s → too low)
+
 server.listen(LOCAL_PORT, () => log(`🚀 Server ready on :${LOCAL_PORT}`));
 
 server.on("error", (e) => {
